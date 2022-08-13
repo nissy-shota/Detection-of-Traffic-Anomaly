@@ -2,33 +2,28 @@ import os
 import numpy as np
 import glob
 import pickle as pkl
+from typing import Dict
 
 import torch
 from torch.utils import data
-import pdb
-import time
 from tqdm import tqdm
 
 
 class DoTADataset(data.Dataset):
-    def __init__(self, args, phase):
+    def __init__(self, config: Dict, phase: str):
         """
         DoTA dataset object. Contains bbox, flow and ego motion.
-
-        Params:
-            args: arguments passed from main file
-            phase: 'train' or 'val'
         """
-        self.args = args
-        self.data_root = self.args.data_root
+        self.config = config
+        self.data_root = self.config["data_root"]
         self.sessions_dirs = glob.glob(os.path.join(self.data_root, "*"))
         self.image_size = (1280, 720)
-        self.overlap = int(self.args.segment_len / 2)
+        self.overlap = int(self.config["segment_len"] / 2)
         self.phase = phase
         if self.phase == "train":
-            self.split_file = os.path.join(args.train_split)
+            self.split_file = os.path.join(self.config["train_split"])
         else:
-            self.split_file = os.path.join(args.val_split)
+            self.split_file = os.path.join(self.config["val_split"])
 
         self.valid_videos = []
         with open(self.split_file) as f:
@@ -38,9 +33,9 @@ class DoTADataset(data.Dataset):
         # Each session contains all normal trajectories
         used_video = []
         min_seq_len = (
-            self.args.segment_len
+            self.config["segment_len"]
             if self.phase == "test"
-            else self.args.segment_len + self.args.pred_timesteps
+            else self.config["segment_len"] + self.config["pred_timesteps"]
         )
         for session_dir in tqdm(self.sessions_dirs):
             vid = session_dir.split("/")[-1].split(".")[0]
@@ -71,23 +66,25 @@ class DoTADataset(data.Dataset):
                 ego_motion = None  # data['ego_motion']# [yaw, x, z]
                 # go farwad along the session to get data samples
                 if self.phase == "test":
-                    stop = len(bbox) - self.args.segment_len + 1
+                    stop = len(bbox) - self.config["segment_len"] + 1
                     segment_starts = range(stop)
                 else:
 
                     max_rand_start = min(
                         [
-                            self.args.seed_max,
+                            self.config["seed_max"],
                             len(bbox)
-                            - self.args.segment_len
-                            - self.args.pred_timesteps
+                            - self.config["segment_len"]
+                            - self.config["pred_timesteps"]
                             + 1,
                         ]
                     )
                     rand_start = np.random.randint(max_rand_start)
 
                     last_start_time = (
-                        len(bbox) - self.args.pred_timesteps - self.args.segment_len
+                        len(bbox)
+                        - self.config["pred_timesteps"]
+                        - self.config["segment_len"]
                     )
                     segment_starts = np.arange(
                         rand_start, last_start_time, self.overlap
@@ -98,7 +95,7 @@ class DoTADataset(data.Dataset):
                         segment_starts = np.append(segment_starts, last_start_time)
 
                 for start in segment_starts:
-                    end = start + self.args.segment_len
+                    end = start + self.config["segment_len"]
                     input_bbox = bbox[start:end, :]
                     input_flow = flow[start:end, :, :, :]
                     input_frame_ids = frame_ids[start:end]
@@ -106,9 +103,13 @@ class DoTADataset(data.Dataset):
                         input_ego_motion = self.get_input(ego_motion, start, end)
                         target_ego_motion = self.get_target(ego_motion, start, end)
                     else:
-                        input_ego_motion = -1 * np.ones((self.args.segment_len, 3))
+                        input_ego_motion = -1 * np.ones((self.config["segment_len"], 3))
                         target_ego_motion = -1 * np.ones(
-                            (self.args.segment_len, self.args.pred_timesteps, 3)
+                            (
+                                self.config["segment_len"],
+                                self.config["pred_timesteps"],
+                                3,
+                            )
                         )
                     if self.phase == "test":
                         target_bbox = None
@@ -193,18 +194,20 @@ class DoTADataset(data.Dataset):
             start: start frame id
             end: end frame id
         Returns:
-            target: Target tensor with shape (self.args.segment_len, pred_timesteps, :)
+            target: Target tensor with shape (segment_len, pred_timesteps, :)
                     The target is the change of the values. e.g. target of yaw is \delta{\theta}_{t0,tn}
         """
         target = torch.zeros(
-            self.args.segment_len, self.args.pred_timesteps, session.shape[-1]
+            self.config["segment_len"], self.config["pred_timesteps"], session.shape[-1]
         )
         for i, target_start in enumerate(range(start, end)):
             """the target of time t is the change of bbox/ego motion at times [t+1,...,t+5}"""
             target_start = target_start + 1
             try:
                 target[i, :, :] = torch.as_tensor(
-                    session[target_start : target_start + self.args.pred_timesteps, :]
+                    session[
+                        target_start : target_start + self.config["pred_timesteps"], :
+                    ]
                     - session[target_start - 1 : target_start, :]
                 )
             except:
