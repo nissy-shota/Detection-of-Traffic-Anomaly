@@ -6,9 +6,10 @@
 Create a data directory and move necessary files from the data set directory.  
 download DoTA_fol_train_data, DoTA_fol_val_data from [here](https://drive.google.com/drive/folders/1IVCedrlPg03Fsg4tqDA2cWYlcdrsKUsp?usp=sharing)  
 
+
+```bash
 Detection-of-Traffic-Anomaly/data$ ls
-```
-DoTA_fol_train_data  DoTA_fol_val_data  metadata_train.json  metadata_val.json  train_split.txt  val_split.txt
+  DoTA_fol_train_data  DoTA_fol_val_data  metadata_train.json  metadata_val.json  train_split.txt  val_split.txt
 ```
 
 ## run
