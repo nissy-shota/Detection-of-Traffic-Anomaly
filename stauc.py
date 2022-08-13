@@ -11,7 +11,11 @@ import copy
 
 
 from sklearn.utils.extmath import stable_cumsum
-from sklearn.utils.validation import column_or_1d, check_consistent_length, assert_all_finite
+from sklearn.utils.validation import (
+    column_or_1d,
+    check_consistent_length,
+    assert_all_finite,
+)
 from sklearn.utils.multiclass import type_of_target
 from sklearn import metrics
 import warnings
@@ -19,36 +23,37 @@ import warnings
 H = 256
 W = 256
 
-def bbox_to_score_map(bboxes, scores, image_size=(1280,720)):
-    '''
+
+def bbox_to_score_map(bboxes, scores, image_size=(1280, 720)):
+    """
     Params:
         bboxes: a BoxList object or a tensor bboxes, in x1y1x2y2 format
         scores: scores of each bbox
     Return:
         score_map: (H, W)
-    '''
+    """
     bboxes = copy.deepcopy(bboxes)
-    
+
     if isinstance(bboxes, list):
         bboxes = torch.tensor(bboxes)
     score_map = torch.zeros(H, W)
     if bboxes.max() > 1:
         # normalize then denormalize to correct size
-        bboxes[:,[0,2]] /= image_size[0] 
-        bboxes[:,[1,3]] /= image_size[1]
-    bboxes[:,[0,2]] *= W
-    bboxes[:,[1,3]] *= H
+        bboxes[:, [0, 2]] /= image_size[0]
+        bboxes[:, [1, 3]] /= image_size[1]
+    bboxes[:, [0, 2]] *= W
+    bboxes[:, [1, 3]] *= H
     bboxes = bboxes.type(torch.long)
-    bboxes[:,[0,2]] = torch.clamp(bboxes[:,[0,2]], min=0, max=W)
-    bboxes[:,[1,3]] = torch.clamp(bboxes[:,[1,3]], min=0, max=H)
-    
+    bboxes[:, [0, 2]] = torch.clamp(bboxes[:, [0, 2]], min=0, max=W)
+    bboxes[:, [1, 3]] = torch.clamp(bboxes[:, [1, 3]], min=0, max=H)
+
     # Generate gaussian
     for bbox, score in zip(bboxes, scores):
-        
+
         w = bbox[2] - bbox[0]
         h = bbox[3] - bbox[1]
         sigma = torch.tensor([w, h])
-        
+
         x_locs = torch.arange(0, w, 1).type(torch.float)
         y_locs = torch.arange(0, h, 1).type(torch.float)
         y_locs = y_locs[:, np.newaxis]
@@ -56,46 +61,53 @@ def bbox_to_score_map(bboxes, scores, image_size=(1280,720)):
         x0 = w // 2
         y0 = h // 2
         # The gaussian is not normalized, we want the center value to equal 1
-        g = np.exp(- (((x_locs - x0) ** 2)/sigma[0] + ((y_locs - y0) ** 2)/sigma[1]) / 2 )        
+        g = np.exp(
+            -(((x_locs - x0) ** 2) / sigma[0] + ((y_locs - y0) ** 2) / sigma[1]) / 2
+        )
         score = g * score
-        score_map[bbox[1]:bbox[3], bbox[0]:bbox[2]] += score
-        
+        score_map[bbox[1] : bbox[3], bbox[0] : bbox[2]] += score
+
     return score_map
+
 
 def get_num_pixels_in_region(bboxes, H, W):
     mask = torch.zeros([H, W])
     for bbox in bboxes:
-        mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1
+        mask[bbox[1] : bbox[3], bbox[0] : bbox[2]] = 1
     K = int(mask.sum())
     return K
 
-def get_tarr(difference_map, 
-             label, 
-             bboxes, 
-             image_size=(1280, 720), 
-             method_type='frame', 
-             obj_bboxes=None, 
-             obj_scores=None,
-             top_percent=-1
-             ):
-    '''
-    Given a difference map and annotations, compute the 
+
+def get_tarr(
+    difference_map,
+    label,
+    bboxes,
+    image_size=(1280, 720),
+    method_type="frame",
+    obj_bboxes=None,
+    obj_scores=None,
+    top_percent=-1,
+):
+    """
+    Given a difference map and annotations, compute the
     True Anomaly Region Rate
     difference_map: (H, W)
-    bboxes: a list of gt anomalous box, x1y1x2y2, not normalized 
+    bboxes: a list of gt anomalous box, x1y1x2y2, not normalized
     label: 0/1, normal or abnormal
-    input_type: 'object' or 'frame' 
-    '''
+    input_type: 'object' or 'frame'
+    """
     if label == 0:
         return 0, []
     elif len(bboxes) == 0:
         return 1, []
     else:
-        if method_type == 'object':
+        if method_type == "object":
             if len(obj_bboxes) == 0 or len(obj_scores) == 0:
                 return 1, []
             else:
-                difference_map = bbox_to_score_map(obj_bboxes, obj_scores, image_size=image_size)
+                difference_map = bbox_to_score_map(
+                    obj_bboxes, obj_scores, image_size=image_size
+                )
         H, W = difference_map.shape
 
         if not isinstance(difference_map, torch.Tensor):
@@ -105,30 +117,31 @@ def get_tarr(difference_map,
             bboxes = torch.tensor(bboxes)
         if bboxes.max() > 1:
             # normalize then denormalize to correct size
-            bboxes[:,[0,2]] /= image_size[0] 
-            bboxes[:,[1,3]] /= image_size[1]
-        bboxes[:,[0,2]] *= W
-        bboxes[:,[1,3]] *= H
+            bboxes[:, [0, 2]] /= image_size[0]
+            bboxes[:, [1, 3]] /= image_size[1]
+        bboxes[:, [0, 2]] *= W
+        bboxes[:, [1, 3]] *= H
         bboxes = bboxes.type(torch.long)
-        
+
         if top_percent != -1:
             K = int(top_percent * difference_map.shape[0] * difference_map.shape[1])
         else:
             K = get_num_pixels_in_region(bboxes, H, W)
 
         values, indices = torch.topk(difference_map.view(-1), k=K)
-        h_coord = (indices // W)#.type(torch.float)
-        w_coord = (indices % W)#.type(torch.float)
-        
+        h_coord = indices // W  # .type(torch.float)
+        w_coord = indices % W  # .type(torch.float)
+
         mask = torch.zeros([H, W])
         for bbox in bboxes:
-            mask[bbox[1]:bbox[3], bbox[0]:bbox[2]] = 1
+            mask[bbox[1] : bbox[3], bbox[0] : bbox[2]] = 1
         true_anomaly_idx = mask[h_coord, w_coord] == 1
         tarr = values[true_anomaly_idx].sum() / (values.sum() + 1e-6)
-        
+
         return tarr, mask
 
-class STAUCMetrics():
+
+class STAUCMetrics:
     def __init__(self):
         self.labels = []
         self.scores = []
@@ -144,12 +157,14 @@ class STAUCMetrics():
         pred_bboxes: a list of np arraies of predicted bounding boxes in each frame of a video.
         """
         for frame_id in range(len(gt_labels)):
-            tarr, mask = get_tarr(difference_map=None, 
-                                    label=gt_labels[frame_id], 
-                                    bboxes=gt_bboxes[frame_id],
-                                    method_type='object',
-                                    obj_bboxes=pred_bboxes[frame_id],
-                                    obj_scores=pred_scores[frame_id])
+            tarr, mask = get_tarr(
+                difference_map=None,
+                label=gt_labels[frame_id],
+                bboxes=gt_bboxes[frame_id],
+                method_type="object",
+                obj_bboxes=pred_bboxes[frame_id],
+                obj_scores=pred_scores[frame_id],
+            )
             self.tarrs.append(tarr)
             self.labels.append(gt_labels[frame_id])
             self.scores.append(np.mean(pred_scores[frame_id]))
@@ -159,22 +174,24 @@ class STAUCMetrics():
         fpr, tpr, sttpr, thresholds = self.stroc_curve(pos_label)
         stauc = metrics.auc(fpr, sttpr)
         auc = metrics.auc(fpr, tpr)
-        gap = self.scores[self.labels == 1].mean() - self.scores[self.labels == 0].mean()
+        gap = (
+            self.scores[self.labels == 1].mean() - self.scores[self.labels == 0].mean()
+        )
         return stauc, auc, gap
 
     def stroc_curve(self, pos_label=0, drop_intermediate=True):
         """Compute the ST-ROC curve."""
         fps, tps, thresholds, positives = self._binary_clf_curve(
-                                            y_true=self.labels, 
-                                            y_score=self.scores, 
-                                            pos_label=pos_label, 
-                                            sample_weight=self.tarrs)
+            y_true=self.labels,
+            y_score=self.scores,
+            pos_label=pos_label,
+            sample_weight=self.tarrs,
+        )
 
         if drop_intermediate and len(fps) > 2:
-            optimal_idxs = np.where(np.r_[True,
-                                          np.logical_or(np.diff(fps, 2),
-                                                        np.diff(tps, 2)),
-                                          True])[0]
+            optimal_idxs = np.where(
+                np.r_[True, np.logical_or(np.diff(fps, 2), np.diff(tps, 2)), True]
+            )[0]
             fps = fps[optimal_idxs]
             tps = tps[optimal_idxs]
             positives = positives[optimal_idxs]
@@ -188,22 +205,26 @@ class STAUCMetrics():
         thresholds = np.r_[thresholds[0] + 1, thresholds]
 
         if fps[-1] <= 0:
-            warnings.warn("No negative samples in y_true, "
-                        "false positive value should be meaningless")
+            warnings.warn(
+                "No negative samples in y_true, "
+                "false positive value should be meaningless"
+            )
             fpr = np.repeat(np.nan, fps.shape)
         else:
             fpr = fps / fps[-1]
 
         if tps[-1] <= 0:
-            warnings.warn("No positive samples in y_true, "
-                        "true positive value should be meaningless")
+            warnings.warn(
+                "No positive samples in y_true, "
+                "true positive value should be meaningless"
+            )
             tpr = np.repeat(np.nan, tps.shape)
-            sttpr =  np.repeat(np.nan, tps.shape)
+            sttpr = np.repeat(np.nan, tps.shape)
         else:
-            sttpr = tps / positives[-1] #tps[-1]
+            sttpr = tps / positives[-1]  # tps[-1]
             tpr = positives / positives[-1]
         return fpr, tpr, sttpr, thresholds
-    
+
     def _binary_clf_curve(self, y_true, y_score, pos_label=None, sample_weight=None):
         """Calculate true and false positives per binary classification threshold.
         Parameters
@@ -233,8 +254,9 @@ class STAUCMetrics():
         """
         # Check to make sure y_true is valid
         y_type = type_of_target(y_true)
-        if not (y_type == "binary" or
-                (y_type == "multiclass" and pos_label is not None)):
+        if not (
+            y_type == "binary" or (y_type == "multiclass" and pos_label is not None)
+        ):
             raise ValueError("{0} format is not supported".format(y_type))
 
         check_consistent_length(y_true, y_score, sample_weight)
@@ -251,24 +273,28 @@ class STAUCMetrics():
         # triggering a FutureWarning by calling np.array_equal(a, b)
         # when elements in the two arrays are not comparable.
         classes = np.unique(y_true)
-        if (pos_label is None and (
-                classes.dtype.kind in ('O', 'U', 'S') or
-                not (np.array_equal(classes, [0, 1]) or
-                    np.array_equal(classes, [-1, 1]) or
-                    np.array_equal(classes, [0]) or
-                    np.array_equal(classes, [-1]) or
-                    np.array_equal(classes, [1])))):
+        if pos_label is None and (
+            classes.dtype.kind in ("O", "U", "S")
+            or not (
+                np.array_equal(classes, [0, 1])
+                or np.array_equal(classes, [-1, 1])
+                or np.array_equal(classes, [0])
+                or np.array_equal(classes, [-1])
+                or np.array_equal(classes, [1])
+            )
+        ):
             classes_repr = ", ".join(repr(c) for c in classes)
-            raise ValueError("y_true takes value in {{{classes_repr}}} and "
-                            "pos_label is not specified: either make y_true "
-                            "take value in {{0, 1}} or {{-1, 1}} or "
-                            "pass pos_label explicitly.".format(
-                                classes_repr=classes_repr))
+            raise ValueError(
+                "y_true takes value in {{{classes_repr}}} and "
+                "pos_label is not specified: either make y_true "
+                "take value in {{0, 1}} or {{-1, 1}} or "
+                "pass pos_label explicitly.".format(classes_repr=classes_repr)
+            )
         elif pos_label is None:
-            pos_label = 1.
+            pos_label = 1.0
 
         # make y_true a boolean vector
-        y_true = (y_true == pos_label)
+        y_true = y_true == pos_label
 
         # sort scores and corresponding truth values
         desc_score_indices = np.argsort(y_score, kind="mergesort")[::-1]
@@ -277,7 +303,7 @@ class STAUCMetrics():
         if sample_weight is not None:
             weight = sample_weight[desc_score_indices]
         else:
-            weight = 1.
+            weight = 1.0
 
         # y_score typically has many tied values. Here we extract
         # the indices associated with the distinct values. We also
@@ -287,7 +313,9 @@ class STAUCMetrics():
 
         # accumulate the true positives with decreasing threshold
         tps = stable_cumsum(y_true * weight)[threshold_idxs]
-        positives = stable_cumsum(y_true)[threshold_idxs] # Note that the number of positive should be computed differently
+        positives = stable_cumsum(y_true)[
+            threshold_idxs
+        ]  # Note that the number of positive should be computed differently
         if sample_weight is not None:
             # express fps as a cumsum to ensure fps is increasing even in
             # the presence of floating point errors
